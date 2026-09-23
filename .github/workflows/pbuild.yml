@@ -1,0 +1,38 @@
+name: Private Build
+
+on:
+  workflow_dispatch
+
+jobs:
+  build:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [x64, x86]
+        configuration: [Release]
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build solution
+        shell: powershell
+        run: |
+          msbuild VCFLister.sln `
+            /p:Configuration=${{ matrix.configuration }} `
+            /p:Platform="${{ matrix.platform }}" `
+            /m `
+            /nologo
+
+      - name: Upload build artifacts
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: VCFLister-${{ matrix.platform }}-${{ matrix.configuration }}
+          path: |
+            **/*.wlx
+            **/*.wlx64
