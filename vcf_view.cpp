@@ -926,6 +926,7 @@ struct PhotoFetchJob {
     size_t sel = 0;
     ULONG gen = 0;
     std::wstring url;
+    HMODULE module = nullptr;
 };
 
 struct PhotoFetchResult {
@@ -969,35 +970,43 @@ static std::vector<uint8_t> HttpGetBytes(const std::wstring& url, DWORD timeoutM
 
 static DWORD WINAPI PhotoFetchThreadProc(LPVOID param) {
     HMODULE hMod = nullptr;
-    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<LPCWSTR>(PhotoFetchThreadProc), &hMod);
-
-    std::unique_ptr<PhotoFetchJob> job(static_cast<PhotoFetchJob*>(param));
-    if (job && IsWindow(job->hwnd)) {
-        auto bytes = HttpGetBytes(job->url);
-        if (IsWindow(job->hwnd)) {
-            auto* res = new PhotoFetchResult();
-            res->sel = job->sel;
-            res->gen = job->gen;
-            res->bytes = std::move(bytes);
-            if (!PostMessageW(job->hwnd, WM_VCF_PHOTO_READY, 0, reinterpret_cast<LPARAM>(res)))
-                delete res;
+    {
+        std::unique_ptr<PhotoFetchJob> job(static_cast<PhotoFetchJob*>(param));
+        if (job) {
+            hMod = job->module;
+            if (IsWindow(job->hwnd)) {
+                auto bytes = HttpGetBytes(job->url);
+                if (IsWindow(job->hwnd)) {
+                    auto* res = new PhotoFetchResult();
+                    res->sel = job->sel;
+                    res->gen = job->gen;
+                    res->bytes = std::move(bytes);
+                    if (!PostMessageW(job->hwnd, WM_VCF_PHOTO_READY, 0, reinterpret_cast<LPARAM>(res)))
+                        delete res;
+                }
+            }
         }
     }
-
     if (hMod) FreeLibraryAndExitThread(hMod, 0);
     return 0;
 }
 
 static bool StartPhotoFetchAsync(HWND hView, ViewState* st, const std::wstring& url) {
     if (!st || !hView || url.empty()) return false;
+    // Pin before the thread starts. A pin inside the thread races with DLL unload.
+    HMODULE hMod = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+        reinterpret_cast<LPCWSTR>(PhotoFetchThreadProc), &hMod);
     auto* job = new PhotoFetchJob();
     job->hwnd = hView;
     job->sel = st->sel;
     job->gen = st->photoFetchGen;
     job->url = url;
+    job->module = hMod;
     HANDLE th = CreateThread(nullptr, 0, PhotoFetchThreadProc, job, 0, nullptr);
     if (!th) {
         delete job;
+        if (hMod) FreeLibrary(hMod);
         return false;
     }
     CloseHandle(th);
@@ -2611,10 +2620,6 @@ void VCFView_SetContacts(HWND h, const std::vector<Contact>& contacts) {
     InvalidateRect(h, nullptr, FALSE);
     RECT rc; GetClientRect(h, &rc);
     SendMessage(h, WM_SIZE, 0, MAKELPARAM(rc.right, rc.bottom));
-}
-
-extern "C" void VCFView_SetRawBlocks(HWND /*h*/, const std::vector<std::wstring>& /*rawBlocks*/) {
-    // Kept for binary/export compatibility; raw blocks are no longer retained in memory.
 }
 
 size_t VCFView_Count(HWND h) { auto* st = (ViewState*)GetWindowLongPtrW(h, GWLP_USERDATA); return st ? st->contacts.size() : 0; }

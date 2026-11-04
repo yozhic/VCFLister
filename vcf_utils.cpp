@@ -121,14 +121,15 @@ std::vector<uint8_t> VcfBase64Decode(const std::wstring& wsrc) {
     return out;
 }
 
-std::vector<uint8_t> VcfQuotedPrintableDecode(const std::wstring& wsrc) {
+std::vector<uint8_t> VcfQuotedPrintableDecode(const std::wstring& wsrc, UINT codepage) {
     std::string in; in.reserve(wsrc.size());
     for (wchar_t wc : wsrc) {
         if (wc <= 127) {
             in.push_back((char)wc);
         } else {
+            // Already-decoded text must go back to the charset's bytes, not always UTF-8.
             char buf[8]{};
-            int n = WideCharToMultiByte(CP_UTF8, 0, &wc, 1, buf, sizeof(buf), nullptr, nullptr);
+            int n = WideCharToMultiByte(codepage, 0, &wc, 1, buf, (int)sizeof(buf), nullptr, nullptr);
             for (int k = 0; k < n; ++k) in.push_back(buf[k]);
         }
     }
@@ -229,7 +230,8 @@ std::wstring VcfDecodeTextValue(const std::wstring& raw, bool isQP, const std::w
         while (!t.empty() && t.back() == L'=') t.pop_back();
         return t;
     }
-    auto bytes = VcfQuotedPrintableDecode(raw);
-    std::wstring w = VcfBytesToWide(bytes, VcfCodepageFromCharset(charset));
+    UINT cp = VcfCodepageFromCharset(charset);
+    auto bytes = VcfQuotedPrintableDecode(raw, cp);
+    std::wstring w = VcfBytesToWide(bytes, cp);
     return stripQpArtifacts(std::move(w));
 }

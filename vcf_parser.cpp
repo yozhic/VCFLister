@@ -394,11 +394,7 @@ std::vector<Contact> ParseVCard(const std::wstring& text)
                         if (fullValue.empty()) { ++j; continue; }
                         else break;
                     }
-                    if (!nxt.empty() && (nxt[0] == L' ' || nxt[0] == L'\t')) {
-                        fullValue.append(nxt.c_str() + 1);
-                        ++j;
-                        continue;
-                    }
+                    // Folded lines (leading space) are already joined by UnfoldVCard_Folded.
                     // vCard 2.1: multiline base64 lines without leading space (no colon)
                     if (nxtTrim.find(L':') == std::wstring::npos) {
                         fullValue.append(nxtTrim);

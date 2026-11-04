@@ -23,7 +23,7 @@ inline constexpr size_t kMaxPhotoDecodedBytes = 8u * 1024u * 1024u;
 
 std::wstring UnescapeVCard(const std::wstring& s);
 std::vector<uint8_t> VcfBase64Decode(const std::wstring& wsrc);
-std::vector<uint8_t> VcfQuotedPrintableDecode(const std::wstring& wsrc);
+std::vector<uint8_t> VcfQuotedPrintableDecode(const std::wstring& wsrc, UINT codepage);
 std::wstring VcfBytesToWide(const std::vector<uint8_t>& bytes, UINT codepage);
 UINT VcfCodepageFromCharset(const std::wstring& charset);
 // Decode text property value (optional QP + charset → Unicode, then unescape)

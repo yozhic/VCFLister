@@ -1,5 +1,4 @@
 ﻿// dllmain.cpp — Total Commander Lister plugin (VCF Lister)
-// Добавлено: передаём в viewer сырьевые блоки vCard для полного вывода всех полей (v3/v4)
 #define NOMINMAX
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0601
@@ -59,7 +58,6 @@ static HINSTANCE g_hInst = nullptr;
 
 // Из viewer-а
 extern "C" void VCFView_SetIniPath(const wchar_t* iniPath);
-extern "C" void VCFView_SetRawBlocks(HWND hView, const std::vector<std::wstring>& rawBlocks);
 extern "C" void VCFView_SetTCDarkMode(int dark, HWND hWnd);
 extern "C" void VCFView_RefreshTheme(HWND hWnd);
 
@@ -120,58 +118,11 @@ static std::wstring ReadWholeFileAsWide(const wchar_t* path) {
         (unsigned char)buf[2] == 0xBF) {
         return tryMbToW(buf.data() + 3, (int)buf.size() - 3, CP_UTF8, true);
     }
-    // строгий UTF-8 (без BOM) → 1251 → OEM → ACP → нестрогий UTF-8
+    // Строгий UTF-8, иначе системная ANSI. На русской Windows это 1251.
+    // Жёсткая 1251 раньше OEM/ACP не годится: преобразование 1251 не падает ни на каком байте.
     std::wstring w = tryMbToW(buf.data(), (int)buf.size(), CP_UTF8, true);
     if (!w.empty()) return w;
-    w = tryMbToW(buf.data(), (int)buf.size(), 1251);
-    if (!w.empty()) return w;
-    w = tryMbToW(buf.data(), (int)buf.size(), CP_OEMCP);
-    if (!w.empty()) return w;
-    w = tryMbToW(buf.data(), (int)buf.size(), CP_ACP);
-    if (!w.empty()) return w;
-    return tryMbToW(buf.data(), (int)buf.size(), CP_UTF8, false);
-}
-
-// Case-insensitive find of ASCII keyword in wide text (vCard keys are case-insensitive per RFC)
-static size_t FindI(const std::wstring& text, const wchar_t* key, size_t from = 0) {
-    if (!key || !*key) return std::wstring::npos;
-    const size_t klen = wcslen(key);
-    if (from >= text.size() || klen == 0 || klen > text.size()) return std::wstring::npos;
-    for (size_t i = from; i + klen <= text.size(); ++i) {
-        bool ok = true;
-        for (size_t j = 0; j < klen; ++j) {
-            wchar_t a = text[i + j];
-            wchar_t b = key[j];
-            if (a >= L'a' && a <= L'z') a = (wchar_t)(a - L'a' + L'A');
-            if (b >= L'a' && b <= L'z') b = (wchar_t)(b - L'a' + L'A');
-            if (a != b) { ok = false; break; }
-        }
-        if (ok) return i;
-    }
-    return std::wstring::npos;
-}
-
-// Разбить исходный текст на блоки BEGIN:VCARD ... END:VCARD (v2.1/v3/v4)
-static std::vector<std::wstring> SplitVCardBlocks(const std::wstring& text) {
-    std::vector<std::wstring> out;
-
-    size_t i = 0, n = text.size();
-    while (i < n) {
-        size_t b = FindI(text, L"BEGIN:VCARD", i);
-        if (b == std::wstring::npos) break;
-        size_t e = FindI(text, L"END:VCARD", b);
-        if (e == std::wstring::npos) { // последний незакрытый — берём до конца
-            out.push_back(text.substr(b));
-            break;
-        }
-        e = text.find_first_of(L"\r\n", e); // до конца строки после END:VCARD
-        if (e == std::wstring::npos) e = n;
-        std::wstring block = text.substr(b, e - b);
-        // Show ALL cards, even completely empty ones (user request). Keep sync with parser.
-        out.push_back(block);
-        i = e;
-    }
-    return out;
+    return tryMbToW(buf.data(), (int)buf.size(), CP_ACP);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -410,7 +361,7 @@ extern "C" {
 BOOL APIENTRY DllMain(HINSTANCE hinstDLL, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         g_hInst = hinstDLL;
-        DisableThreadLibraryCalls(hinstDLL);
+        // Static CRT (/MT) needs DLL_THREAD_ATTACH/DETACH. Do not disable them.
         VCFView_SetModuleInstance(hinstDLL);
     }
     else if (reason == DLL_PROCESS_DETACH) {
