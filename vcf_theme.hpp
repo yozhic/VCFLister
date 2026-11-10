@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <windows.h>
 #include <string>
 
@@ -7,6 +7,10 @@ extern std::wstring g_iniPath;
 extern bool         g_dark;
 extern bool         g_tcRu;
 extern int          g_tcDarkMode; // -1 unknown, 0 light, 1 dark (TC cm_SwitchDarkMode)
+
+std::wstring GetPluginDirectory();
+std::wstring ResolvePluginIni();
+std::wstring ResolveWincmdIni();
 
 extern HBRUSH   g_hbrBk;
 extern HBRUSH   g_hbrListBg;

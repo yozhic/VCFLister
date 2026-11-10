@@ -1,15 +1,25 @@
+﻿## [2.5.6] – 2026-11-10
+
+### Added
+- **Хранение VCFLister.ini в папке плагина ([#25](https://github.com/chuikoff/VCFLister/issues/25)):**
+  - Поддержка хранения настроек [VCFLister] (ListWidth, LoadPhotoUrl, Dark, Language) в файле VCFLister.ini в каталоге плагина рядом с DLL.
+  - Настройки Total Commander (цвета [Lister] BackColor и язык LanguageIni) надёжно считываются из wincmd.ini даже при релокации INI плагина через [ReplaceIniLocation].
+  - Добавлена опция принудительного выбора языка интерфейса [VCFLister] Language=auto|RUS|ENG.
+  - Опция SaveToPluginDir=1 (или IniInPluginDir=1) позволяет автоматически сохранить VCFLister.ini в каталоге плагина при перемещении разделителя.
+
+Архив: VCFLister-2.5.6.zip (.wlx + .wlx64 + pluginst.inf + docs).
+
 ## [2.5.5] – 2026-11-04
 
 ### Fixed
-- **Quoted-printable:** символы выше ASCII переводятся в кодовую страницу из `CHARSET`, а не всегда в UTF-8. Имена в ISO-8859-1 и Windows-1251 больше не портятся. Записи `=XX` без изменений.
-- **HTTP-фото:** модуль удерживается до запуска потока, задача уничтожается до `FreeLibraryAndExitThread`. `DisableThreadLibraryCalls` убран: статическая CRT требует уведомления о потоке.
+- **Quoted-printable:** символы выше ASCII переводятся в кодовую страницу из CHARSET, а не всегда в UTF-8. Имена в ISO-8859-1 и Windows-1251 больше не портятся. Записи =XX без изменений.
+- **HTTP-фото:** модуль удерживается до запуска потока, задача уничтожается до FreeLibraryAndExitThread. DisableThreadLibraryCalls убран: статическая CRT требует уведомления о потоке.
 - **Кодировка файла без BOM:** после строгого UTF-8 используется системная ANSI. На русской Windows это 1251.
 
 ### Cleanup
-- Удалены неиспользуемые `FindI`, `SplitVCardBlocks` и `VCFView_SetRawBlocks`.
+- Удалены неиспользуемые FindI, SplitVCardBlocks и VCFView_SetRawBlocks.
 
-Архив: `VCFLister-2.5.5.zip` (`.wlx` + `.wlx64` + `pluginst.inf` + docs).
-
+Архив: VCFLister-2.5.5.zip (.wlx + .wlx64 + pluginst.inf + docs).
 ## [2.5.4] – 2026-10-16
 
 ### Fixed

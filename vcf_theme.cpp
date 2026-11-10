@@ -16,6 +16,57 @@ COLORREF g_clrListBg, g_clrListSel;
 
 void SafeDelBrush(HBRUSH& b) { if (b) { DeleteObject(b); b = nullptr; } }
 
+std::wstring GetPluginDirectory() {
+    HMODULE hMod = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCWSTR)&GetPluginDirectory, &hMod) || !hMod) {
+        return L"";
+    }
+    wchar_t path[MAX_PATH]{};
+    DWORD len = GetModuleFileNameW(hMod, path, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) return L"";
+    wchar_t* slash = wcsrchr(path, L'\\');
+    if (!slash) slash = wcsrchr(path, L'/');
+    if (!slash) return L"";
+    *slash = L'\0';
+    return path;
+}
+
+std::wstring ResolvePluginIni() {
+    std::wstring dir = GetPluginDirectory();
+    if (dir.empty()) return L"";
+    std::wstring cand1 = dir + L"\\VCFLister.ini";
+    if (GetFileAttributesW(cand1.c_str()) != INVALID_FILE_ATTRIBUTES)
+        return cand1;
+    std::wstring cand2 = dir + L"\\VcfLister.ini";
+    if (GetFileAttributesW(cand2.c_str()) != INVALID_FILE_ATTRIBUTES)
+        return cand2;
+    return L"";
+}
+
+std::wstring ResolveWincmdIni() {
+    wchar_t out[MAX_PATH]{};
+    if (!g_iniPath.empty()) {
+        wcsncpy_s(out, g_iniPath.c_str(), _TRUNCATE);
+        wchar_t* slash = wcsrchr(out, L'\\');
+        if (!slash) slash = wcsrchr(out, L'/');
+        if (slash) {
+            wcsncpy_s(slash + 1, MAX_PATH - (size_t)(slash + 1 - out), L"wincmd.ini", _TRUNCATE);
+            if (GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES) return out;
+            wcsncpy_s(slash + 1, MAX_PATH - (size_t)(slash + 1 - out), L"WINCMD.INI", _TRUNCATE);
+            if (GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES) return out;
+        }
+    }
+    wchar_t appdata[MAX_PATH]{};
+    if (GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH) > 0) {
+        swprintf_s(out, L"%s\\GHISLER\\wincmd.ini", appdata);
+        if (GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES) return out;
+        swprintf_s(out, L"%s\\GHISLER\\WINCMD.INI", appdata);
+        if (GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES) return out;
+    }
+    return g_iniPath;
+}
+
 static bool ReadRegDWORD(HKEY root, const wchar_t* subkey, const wchar_t* name, DWORD& out) {
     HKEY h; if (RegOpenKeyExW(root, subkey, 0, KEY_READ, &h) != ERROR_SUCCESS) return false;
     DWORD type = 0, size = sizeof(DWORD);
@@ -32,12 +83,13 @@ static bool DetectSystemDark() {
 // TC stores panel colors; dark mode typically uses dark BackColor.
 // Used when ShowFlags not yet known (Dark=2 auto).
 static bool DetectTCDarkFromIniColors() {
-    if (g_iniPath.empty()) return false;
+    std::wstring wincmd = ResolveWincmdIni();
+    if (wincmd.empty()) return false;
     wchar_t buf[64]{};
     // Prefer Lister colors if set; fall back to file panel BackColor
-    GetPrivateProfileStringW(L"Lister", L"BackColor", L"", buf, 64, g_iniPath.c_str());
+    GetPrivateProfileStringW(L"Lister", L"BackColor", L"", buf, 64, wincmd.c_str());
     if (!buf[0])
-        GetPrivateProfileStringW(L"Colors", L"BackColor", L"", buf, 64, g_iniPath.c_str());
+        GetPrivateProfileStringW(L"Colors", L"BackColor", L"", buf, 64, wincmd.c_str());
     if (!buf[0]) return false;
     // Formats: "R,G,B" or single COLORREF decimal
     int r = 0, g = 0, b = 0;
@@ -56,18 +108,48 @@ static bool DetectTCDarkFromIniColors() {
 }
 
 static int ReadIniDarkMode() {
-    if (g_iniPath.empty()) return 2;
     wchar_t buf[16]{};
-    GetPrivateProfileStringW(L"VCFLister", L"Dark", L"2", buf, 16, g_iniPath.c_str());
-    if (buf[0] == L'0') return 0;
-    if (buf[0] == L'1') return 1;
-    return 2; // auto → TC dark mode
+    std::wstring pluginIni = ResolvePluginIni();
+    if (!pluginIni.empty()) {
+        GetPrivateProfileStringW(L"VCFLister", L"Dark", L"", buf, 16, pluginIni.c_str());
+        if (buf[0] == L'0') return 0;
+        if (buf[0] == L'1') return 1;
+        if (buf[0] == L'2') return 2;
+    }
+    if (!g_iniPath.empty()) {
+        GetPrivateProfileStringW(L"VCFLister", L"Dark", L"2", buf, 16, g_iniPath.c_str());
+        if (buf[0] == L'0') return 0;
+        if (buf[0] == L'1') return 1;
+        return 2; // auto → TC dark mode
+    }
+    return 2;
 }
 
 static bool DetectTCRussian() {
-    if (!g_iniPath.empty()) {
-        wchar_t buf[MAX_PATH]{};
-        GetPrivateProfileStringW(L"Configuration", L"LanguageIni", L"", buf, MAX_PATH, g_iniPath.c_str());
+    wchar_t buf[MAX_PATH]{};
+    std::wstring pluginIni = ResolvePluginIni();
+    // 1) Explicit setting: [VCFLister] Language=auto|RUS|ENG
+    if (!pluginIni.empty()) {
+        GetPrivateProfileStringW(L"VCFLister", L"Language", L"", buf, MAX_PATH, pluginIni.c_str());
+    }
+    if (!buf[0] && !g_iniPath.empty()) {
+        GetPrivateProfileStringW(L"VCFLister", L"Language", L"", buf, MAX_PATH, g_iniPath.c_str());
+    }
+    if (buf[0]) {
+        std::wstring s = buf;
+        std::wstring low; low.resize(s.size());
+        std::transform(s.begin(), s.end(), low.begin(), ::towlower);
+        if (low.find(L"rus") != std::wstring::npos || low.find(L"russian") != std::wstring::npos) return true;
+        if (low.find(L"eng") != std::wstring::npos || low.find(L"english") != std::wstring::npos) return false;
+    }
+
+    // 2) TC configuration from wincmd.ini
+    std::wstring wincmd = ResolveWincmdIni();
+    if (!wincmd.empty()) {
+        buf[0] = 0;
+        GetPrivateProfileStringW(L"Configuration", L"LanguageIni", L"", buf, MAX_PATH, wincmd.c_str());
+        if (!buf[0])
+            GetPrivateProfileStringW(L"Configuration", L"LanguageDll", L"", buf, MAX_PATH, wincmd.c_str());
         if (buf[0]) {
             std::wstring s = buf;
             std::wstring low; low.resize(s.size());

@@ -1,9 +1,9 @@
-# package.ps1 — упаковывает релизный архив VCFLister для установки в Total Commander
+﻿# package.ps1 — упаковывает релизный архив VCFLister для установки в Total Commander
 $ErrorActionPreference = "Stop"
 
 $root = $PSScriptRoot
 $stateFile = Join-Path $root "build_state.json"
-$ver = "2.5.5"
+$ver = "2.5.6"
 if (Test-Path $stateFile) {
     try {
         $st = Get-Content $stateFile -Raw | ConvertFrom-Json

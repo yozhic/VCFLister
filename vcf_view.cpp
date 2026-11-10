@@ -841,13 +841,30 @@ static int MeasureEditContentHeight(HWND hEdit, int widthPx) {
 }
 
 static int ReadIniInt(const wchar_t* key, int defVal) {
-    if (g_iniPath.empty()) return defVal;
-    return (int)GetPrivateProfileIntW(L"VCFLister", key, defVal, g_iniPath.c_str());
+    std::wstring pluginIni = ResolvePluginIni();
+    if (!pluginIni.empty()) {
+        int v = (int)GetPrivateProfileIntW(L"VCFLister", key, -999999, pluginIni.c_str());
+        if (v != -999999) return v;
+    }
+    if (!g_iniPath.empty()) {
+        return (int)GetPrivateProfileIntW(L"VCFLister", key, defVal, g_iniPath.c_str());
+    }
+    return defVal;
 }
 static void WriteIniInt(const wchar_t* key, int val) {
-    if (g_iniPath.empty()) return;
+    std::wstring targetIni = ResolvePluginIni();
+    if (targetIni.empty()) {
+        if (!g_iniPath.empty() && 
+            (GetPrivateProfileIntW(L"VCFLister", L"SaveToPluginDir", 0, g_iniPath.c_str()) != 0 ||
+             GetPrivateProfileIntW(L"VCFLister", L"IniInPluginDir", 0, g_iniPath.c_str()) != 0)) {
+            std::wstring dir = GetPluginDirectory();
+            if (!dir.empty()) targetIni = dir + L"\\VCFLister.ini";
+        }
+    }
+    if (targetIni.empty()) targetIni = g_iniPath;
+    if (targetIni.empty()) return;
     wchar_t buf[32]; wsprintfW(buf, L"%d", val);
-    WritePrivateProfileStringW(L"VCFLister", key, buf, g_iniPath.c_str());
+    WritePrivateProfileStringW(L"VCFLister", key, buf, targetIni.c_str());
 }
 static void LoadViewSettings(ViewState* st) {
     if (!st) return;
