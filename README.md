@@ -1,4 +1,4 @@
-# VCFLister
+﻿# VCFLister
 
 **VCFLister** — плагин Lister (`.wlx64`) для [Total Commander](https://www.ghisler.com/), позволяющий удобно просматривать контакты из файлов формата **VCF/vCard**.
 
@@ -45,13 +45,21 @@
 - В карточке **значения полей жирным** (подписи обычным), блок **NOTE** отделён.
 - Тёмная тема следует **режиму TC** (`cm_SwitchDarkMode`), а не теме Windows.
 
-## Настройки (в wincmd.ini, секция `[VCFLister]`)
+## Настройки
+
+Плагин считывает настройки секции `[VCFLister]` в следующем порядке приоритета:
+1. `VCFLister.ini` в каталоге самого плагина (рядом с `VCFLister.wlx` / `VCFLister.wlx64`).
+2. `wincmd.ini` (путь, переданный Total Commander в `ListSetDefaultParams`).
+
+При этом цвета Total Commander (`[Lister] BackColor`) и язык интерфейса (`LanguageIni` / `LanguageDll`) плагин всегда считывает из `wincmd.ini` (включая случай, когда ini-файл плагина переопределён через `[ReplaceIniLocation]`).
 
 | Ключ | Значение | По умолчанию |
 |------|----------|--------------|
 | `ListWidth` | ширина списка (логич. px @96dpi) | 300 |
-| `LoadPhotoUrl` | `1` — загружать PHOTO по http(s) | `0` (выкл.) |
-| `Dark` | `0` светлая / `1` тёмная / `2` как в TC | `2` |
+| `LoadPhotoUrl` | 1 — загружать PHOTO по http(s) | 0 (выкл.) |
+| `Dark` | 0 светлая / 1 тёмная / 2 как в TC | 2 |
+| `Language` | язык интерфейса: auto (как в TC), RUS, ENG | auto |
+| `SaveToPluginDir` | 1 — создать VCFLister.ini в папке плагина при сохранении разделителя | 0 |
 
 ## Сборка
 
@@ -60,4 +68,3 @@
 ## Лицензия
 
 См. LICENSE.txt.
-

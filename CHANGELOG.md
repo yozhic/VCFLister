@@ -1,3 +1,55 @@
+﻿## [2.5.6] – 2026-11-10
+
+### Added
+- **Хранение VCFLister.ini в папке плагина ([#25](https://github.com/chuikoff/VCFLister/issues/25)):**
+  - Поддержка хранения настроек [VCFLister] (ListWidth, LoadPhotoUrl, Dark, Language) в файле VCFLister.ini в каталоге плагина рядом с DLL.
+  - Настройки Total Commander (цвета [Lister] BackColor и язык LanguageIni) надёжно считываются из wincmd.ini даже при релокации INI плагина через [ReplaceIniLocation].
+  - Добавлена опция принудительного выбора языка интерфейса [VCFLister] Language=auto|RUS|ENG.
+  - Опция SaveToPluginDir=1 (или IniInPluginDir=1) позволяет автоматически сохранить VCFLister.ini в каталоге плагина при перемещении разделителя.
+
+Архив: VCFLister-2.5.6.zip (.wlx + .wlx64 + pluginst.inf + docs).
+
+## [2.5.5] – 2026-11-04
+
+### Fixed
+- **Quoted-printable:** символы выше ASCII переводятся в кодовую страницу из CHARSET, а не всегда в UTF-8. Имена в ISO-8859-1 и Windows-1251 больше не портятся. Записи =XX без изменений.
+- **HTTP-фото:** модуль удерживается до запуска потока, задача уничтожается до FreeLibraryAndExitThread. DisableThreadLibraryCalls убран: статическая CRT требует уведомления о потоке.
+- **Кодировка файла без BOM:** после строгого UTF-8 используется системная ANSI. На русской Windows это 1251.
+
+### Cleanup
+- Удалены неиспользуемые FindI, SplitVCardBlocks и VCFView_SetRawBlocks.
+
+Архив: VCFLister-2.5.5.zip (.wlx + .wlx64 + pluginst.inf + docs).
+## [2.5.4] – 2026-10-16
+
+### Fixed
+- **Сборка Debug|x64 и compile.bat**: реализованы отсутствовавшие ANSI-экспорты `ListLoad`, `ListLoadNext`, `ListSearchText` под `_WIN64` для полного соответствия `VCFLister.def`.
+- **Буфер EM_GETTEXTRANGE**: исправлено потенциальное переполнение буфера на 1 символ из-за обязательного нуль-терминатора RichEdit в `GetEditCurrentLine` и `GetEditSelectionText`.
+- **EM_POSFROMCHAR в RichEdit**: исправлена передача целочисленного смещения вместо `POINTL*` в `wParam` (устранена угроза Access Violation при замере высоты карточки).
+- **Повторное открытие окна**: вызов `UnregisterClassW` убран из `WM_DESTROY` (вызывал `ERROR_CLASS_HAS_WINDOWS` и блокировал повторную регистрацию класса).
+- **Кодировка Windows-1251**: исправлен порядок детектирования кодировок в `ReadWholeFileAsWide` и `VcfBytesToWide` — нестрогий UTF-8 больше не перехватывает и не портит файлы 1251 без BOM.
+- **Поддержка vCard 2.1**: парсинг параметров `QUOTED-PRINTABLE` / `QP` и `BASE64` без префикса `ENCODING=`; корректная загрузка многострочного base64 без отступов.
+- **Скролл над фото**: в `PhotoWndProc` добавлен форвардинг `WM_MOUSEWHEEL` в родительское окно, карточка теперь прокручивается и при наведении на фото.
+- **Точность подсветки поиска**: `VCFView_SearchEx` переведён на `EM_FINDTEXTEXW`, устранён сдвиг рамки выделения из-за `\r\n`.
+- **HTTP-фото**: удержание модуля DLL в памяти на время работы потока (`GetModuleHandleExW` + `FreeLibraryAndExitThread`), очистка очереди от `WM_VCF_PHOTO_READY` в `WM_DESTROY`.
+- **Локаль**: fallback на системный русский язык `PRIMARYLANGID(GetUserDefaultUILanguage())` при пустом `LanguageIni`.
+- **Кодировка строк интерфейса**: добавлен флаг компилятора `/utf-8` и сохранён UTF-8 BOM, устранено искажение русских подписей и контекстного меню при сборке на любой локали.
+- **Автономность (CRT /MT)**: плагин переведён на статическую линковку с CRT (`/MT`), удалены внешние зависимости от распространяемых пакетов `VCRUNTIME140.dll` и `MSVCP140.dll`.
+
+### Cleanup
+- Удалено избыточное дублирование строк `rawBlocks` в `ViewState` и `dllmain.cpp`, экономящее память при открытии больших файлов.
+- В проект `VCFLister.vcxproj` добавлены отсутствующие заголовки `vcf_theme.hpp` и `vcf_utils.hpp`.
+
+Архив: `VCFLister-2.5.4.zip` (`.wlx` + `.wlx64` + `pluginst.inf` + docs).
+
+## [2.5.3] – 2026-10-01
+
+### Fixed
+- **#24** Светлая тема: подпись «📷 photo» снова обычный чекбокс. Пустая тема (`SetWindowTheme(L"", L"")`) оставляла чёрную плашку. В тёмной теме подпись по-прежнему светлая, фон — цвет строки фильтра.
+- **#23** Полосы прокрутки списка и карточки в тёмной теме: `DarkMode_Explorer` и immersive dark mode (атрибуты DWM 20 / 19). В светлой теме тема контрола сбрасывается.
+
+Архив: `VCFLister-2.5.3.zip` (`.wlx` + `.wlx64` + `pluginst.inf` + docs).
+
 ## [2.5.2] – 2026-09-23
 
 Восстановлены изменения 2.3–2.5.0. Опубликованная 2.5.1 собрана от v2.2 (`e4f3e5d`), теги 2.3–2.5.0 в неё не входили. Эта версия — дерево `origin/1.6` (v2.5.0) плюс правки код-ревью, перенесённые на этот код.

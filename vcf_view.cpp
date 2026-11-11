@@ -13,11 +13,13 @@
 #include <commctrl.h>
 #include <richedit.h>
 #include <uxtheme.h>
+#include <dwmapi.h>
 #include <wininet.h>
 #pragma comment(lib, "Gdiplus.lib")
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "wininet.lib")
 #pragma comment(lib, "uxtheme.lib")
+#pragma comment(lib, "dwmapi.lib")
 
 #include <vector>
 #include <string>
@@ -605,7 +607,6 @@ static const int kSplitHit = 4; // half-width of splitter hit zone (px at 96dpi)
 
 struct ViewState {
     std::vector<Contact> contacts;           // все контакты файла
-    std::vector<std::wstring> rawBlocks;     // сырые vCard-блоки
     std::vector<size_t> visibleIdx;          // индексы после quick filter
     size_t sel = 0;
 
@@ -706,6 +707,7 @@ static void UnregisterPluginClasses() {
 void VCFView_OnDllDetach() {
     if (g_liveViews == 0) {
         SafeDelBrush(g_hbrBk);
+        SafeDelBrush(g_hbrListBg);
         if (g_gdipToken) {
             GdiplusShutdown(g_gdipToken);
             g_gdipToken = 0;
@@ -797,10 +799,14 @@ static int MeasureEditContentHeight(HWND hEdit, int widthPx) {
         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW);
 
     int byPos = 0;
-    // Y of last character (client coords) — most accurate when char is laid out
-    LRESULT pos = SendMessageW(hEdit, EM_POSFROMCHAR, (WPARAM)(len > 0 ? len - 1 : 0), 0);
-    if (pos != (LRESULT)-1) {
-        int y = (int)(short)HIWORD((DWORD)pos);
+    // Y of last character (client coords) — RichEdit 2.0+ takes POINTL* in wParam
+    POINTL ptl{};
+    LRESULT pos = SendMessageW(hEdit, EM_POSFROMCHAR, (WPARAM)&ptl, (LPARAM)(len > 0 ? len - 1 : 0));
+    if (pos != (LRESULT)-1 || ptl.y > 0) {
+        int y = (int)ptl.y;
+        if (y <= 0 && pos != (LRESULT)-1) {
+            y = (int)(short)HIWORD((DWORD)pos);
+        }
         // include full last line + padding
         byPos = y + lineH + 8;
     }
@@ -835,13 +841,30 @@ static int MeasureEditContentHeight(HWND hEdit, int widthPx) {
 }
 
 static int ReadIniInt(const wchar_t* key, int defVal) {
-    if (g_iniPath.empty()) return defVal;
-    return (int)GetPrivateProfileIntW(L"VCFLister", key, defVal, g_iniPath.c_str());
+    std::wstring pluginIni = ResolvePluginIni();
+    if (!pluginIni.empty()) {
+        int v = (int)GetPrivateProfileIntW(L"VCFLister", key, -999999, pluginIni.c_str());
+        if (v != -999999) return v;
+    }
+    if (!g_iniPath.empty()) {
+        return (int)GetPrivateProfileIntW(L"VCFLister", key, defVal, g_iniPath.c_str());
+    }
+    return defVal;
 }
 static void WriteIniInt(const wchar_t* key, int val) {
-    if (g_iniPath.empty()) return;
+    std::wstring targetIni = ResolvePluginIni();
+    if (targetIni.empty()) {
+        if (!g_iniPath.empty() && 
+            (GetPrivateProfileIntW(L"VCFLister", L"SaveToPluginDir", 0, g_iniPath.c_str()) != 0 ||
+             GetPrivateProfileIntW(L"VCFLister", L"IniInPluginDir", 0, g_iniPath.c_str()) != 0)) {
+            std::wstring dir = GetPluginDirectory();
+            if (!dir.empty()) targetIni = dir + L"\\VCFLister.ini";
+        }
+    }
+    if (targetIni.empty()) targetIni = g_iniPath;
+    if (targetIni.empty()) return;
     wchar_t buf[32]; wsprintfW(buf, L"%d", val);
-    WritePrivateProfileStringW(L"VCFLister", key, buf, g_iniPath.c_str());
+    WritePrivateProfileStringW(L"VCFLister", key, buf, targetIni.c_str());
 }
 static void LoadViewSettings(ViewState* st) {
     if (!st) return;
@@ -920,6 +943,7 @@ struct PhotoFetchJob {
     size_t sel = 0;
     ULONG gen = 0;
     std::wstring url;
+    HMODULE module = nullptr;
 };
 
 struct PhotoFetchResult {
@@ -962,29 +986,44 @@ static std::vector<uint8_t> HttpGetBytes(const std::wstring& url, DWORD timeoutM
 }
 
 static DWORD WINAPI PhotoFetchThreadProc(LPVOID param) {
-    std::unique_ptr<PhotoFetchJob> job(static_cast<PhotoFetchJob*>(param));
-    if (!job || !IsWindow(job->hwnd)) return 0;
-    auto bytes = HttpGetBytes(job->url);
-    if (!IsWindow(job->hwnd)) return 0;
-    auto* res = new PhotoFetchResult();
-    res->sel = job->sel;
-    res->gen = job->gen;
-    res->bytes = std::move(bytes);
-    if (!PostMessageW(job->hwnd, WM_VCF_PHOTO_READY, 0, reinterpret_cast<LPARAM>(res)))
-        delete res;
+    HMODULE hMod = nullptr;
+    {
+        std::unique_ptr<PhotoFetchJob> job(static_cast<PhotoFetchJob*>(param));
+        if (job) {
+            hMod = job->module;
+            if (IsWindow(job->hwnd)) {
+                auto bytes = HttpGetBytes(job->url);
+                if (IsWindow(job->hwnd)) {
+                    auto* res = new PhotoFetchResult();
+                    res->sel = job->sel;
+                    res->gen = job->gen;
+                    res->bytes = std::move(bytes);
+                    if (!PostMessageW(job->hwnd, WM_VCF_PHOTO_READY, 0, reinterpret_cast<LPARAM>(res)))
+                        delete res;
+                }
+            }
+        }
+    }
+    if (hMod) FreeLibraryAndExitThread(hMod, 0);
     return 0;
 }
 
 static bool StartPhotoFetchAsync(HWND hView, ViewState* st, const std::wstring& url) {
     if (!st || !hView || url.empty()) return false;
+    // Pin before the thread starts. A pin inside the thread races with DLL unload.
+    HMODULE hMod = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+        reinterpret_cast<LPCWSTR>(PhotoFetchThreadProc), &hMod);
     auto* job = new PhotoFetchJob();
     job->hwnd = hView;
     job->sel = st->sel;
     job->gen = st->photoFetchGen;
     job->url = url;
+    job->module = hMod;
     HANDLE th = CreateThread(nullptr, 0, PhotoFetchThreadProc, job, 0, nullptr);
     if (!th) {
         delete job;
+        if (hMod) FreeLibrary(hMod);
         return false;
     }
     CloseHandle(th);
@@ -1108,7 +1147,7 @@ static std::wstring GetEditCurrentLine(HWND hEdit) {
         if (lineLen < 0) lineLen = 0;
     }
     if (lineLen <= 0) return L"";
-    std::wstring out((size_t)lineLen, L'\0');
+    std::wstring out((size_t)lineLen + 1, L'\0');
     TEXTRANGEW tr{};
     tr.chrg.cpMin = idx;
     tr.chrg.cpMax = idx + lineLen;
@@ -1135,13 +1174,14 @@ static std::wstring GetEditSelectionText(HWND hEdit) {
     LONG n = cr.cpMax - cr.cpMin;
     if (n < 0) n = -n;
     if (n > 1'000'000) n = 1'000'000;
-    std::wstring out((size_t)n, L'\0');
+    std::wstring out((size_t)n + 1, L'\0');
     TEXTRANGEW tr{};
     tr.chrg.cpMin = (std::min)(cr.cpMin, cr.cpMax);
     tr.chrg.cpMax = (std::max)(cr.cpMin, cr.cpMax);
     tr.lpstrText = &out[0];
     int got = (int)SendMessageW(hEdit, EM_GETTEXTRANGE, 0, (LPARAM)&tr);
     if (got < 0) got = 0;
+    if (got > (int)n) got = (int)n;
     out.resize((size_t)got);
     return out;
 }
@@ -1699,6 +1739,11 @@ static LRESULT CALLBACK PhotoWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     // Parent must be our viewer; never trust GWLP_USERDATA on a dead/foreign HWND.
     auto* st = ViewStateFromHwnd(GetParent(hwnd));
     switch (msg) {
+    case WM_MOUSEWHEEL: {
+        HWND viewer = GetParent(hwnd);
+        if (viewer) return SendMessageW(viewer, WM_MOUSEWHEEL, wParam, lParam);
+        break;
+    }
     case WM_ERASEBKGND: {
         // Paint will cover everything via double buffer; prevent default erase to reduce flicker
         return 1;
@@ -1789,6 +1834,33 @@ static void SetSelectionAndReveal(HWND h, ViewState* st, size_t idx) {
     InvalidateRect(h, nullptr, FALSE);
 }
 
+// Photo checkbox: native theme in light mode (#24). In dark mode visual styles
+// are off so WM_CTLCOLORBTN can paint light text on the list row (#20).
+static void ApplyPhotoCheckboxChrome(HWND btn) {
+    if (!btn || !IsWindow(btn)) return;
+    SetWindowTheme(btn, g_dark ? L"" : nullptr, g_dark ? L"" : nullptr);
+    InvalidateRect(btn, nullptr, TRUE);
+}
+
+// Child SCROLLBAR controls. DarkMode_Explorer + immersive-dark, same pair as
+// wlx-multidoc-viewer (DWMWA 20, fallback 19). Light mode restores the default theme.
+static void ApplyScrollbarTheme(HWND hwnd) {
+    if (!hwnd || !IsWindow(hwnd)) return;
+    const BOOL state = g_dark ? TRUE : FALSE;
+    if (DwmSetWindowAttribute(hwnd, 20, &state, sizeof(state)) != S_OK)
+        DwmSetWindowAttribute(hwnd, 19, &state, sizeof(state));
+    SetWindowTheme(hwnd, g_dark ? L"DarkMode_Explorer" : nullptr, nullptr);
+    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME);
+}
+
+extern "C" void VCFView_ApplyChrome(HWND h) {
+    auto* st = ViewStateFromHwnd(h);
+    if (!st) return;
+    ApplyPhotoCheckboxChrome(st->hPhotoOnly);
+    ApplyScrollbarTheme(st->hScroll);
+    ApplyScrollbarTheme(st->hRightScroll);
+}
+
 // ===================== Window proc =====================
 static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     auto* st = (ViewState*)GetWindowLongPtrW(h, GWLP_USERDATA);
@@ -1855,8 +1927,6 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_TEXT,
             0, 0, 0, 0, h, (HMENU)1011, ModuleInstance(), nullptr);
         SendMessageW(st->hPhotoOnly, WM_SETFONT, (WPARAM)st->fonts.hSmall, TRUE);
-        // Disable visual styles so WM_CTLCOLORBTN can set light text in dark theme (#20)
-        SetWindowTheme(st->hPhotoOnly, L"", L"");
         SetWindowSubclass(st->hPhotoOnly, EscChildSubclass, 2, (DWORD_PTR)h);
 
         // Скролл слева
@@ -1892,12 +1962,17 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         SendMessageW(st->hEdit, EM_AUTOURLDETECT, FALSE, 0);
         SetWindowSubclass(st->hEdit, EditSubclassProc, 3, 0);
 
+        VCFView_ApplyChrome(h);
         SetFocus(h);
         return 0;
     }
     case WM_DESTROY: {
         if (st) {
             ++st->photoFetchGen;
+            MSG pendingMsg{};
+            while (PeekMessageW(&pendingMsg, h, WM_VCF_PHOTO_READY, WM_VCF_PHOTO_READY, PM_REMOVE)) {
+                delete reinterpret_cast<PhotoFetchResult*>(pendingMsg.lParam);
+            }
             if (st->hEdit && IsWindow(st->hEdit)) {
                 RemoveWindowSubclass(st->hEdit, EditSubclassProc, 3);
                 DestroyWindow(st->hEdit);
@@ -1919,7 +1994,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             SetWindowLongPtrW(h, GWLP_USERDATA, 0);
             if (InterlockedDecrement(&g_liveViews) == 0) {
                 SafeDelBrush(g_hbrBk);
-                UnregisterPluginClasses();
+                SafeDelBrush(g_hbrListBg);
             }
             ReleaseGdiplus();
         }
@@ -2326,6 +2401,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_SYSCOLORCHANGE: {
         RecomputeTheme();
         if (st) LoadViewSettings(st);
+        VCFView_ApplyChrome(h);
         UpdateRightPanel(st);
         InvalidateRect(h, nullptr, FALSE);
         return 0;
@@ -2428,12 +2504,13 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_CTLCOLOREDIT: {
         HDC dc = (HDC)w;
         HWND hCtl = (HWND)l;
-        // Photo filter checkbox sits on list background — light text in dark theme
-        if (st && st->hPhotoOnly && hCtl == st->hPhotoOnly) {
+        // Dark theme only. Light mode keeps the themed checkbox (#24): an
+        // unthemed button with a hollow brush paints a black plate.
+        if (st && st->hPhotoOnly && hCtl == st->hPhotoOnly && g_dark) {
             SetTextColor(dc, g_clrTxt);
-            SetBkMode(dc, TRANSPARENT);
-            // Transparent so list-area paint shows through
-            return (INT_PTR)GetStockObject(HOLLOW_BRUSH);
+            SetBkColor(dc, g_clrListBg);
+            SetBkMode(dc, OPAQUE);
+            return (INT_PTR)(g_hbrListBg ? g_hbrListBg : GetStockObject(BLACK_BRUSH));
         }
         SetTextColor(dc, g_clrTxt);
         SetBkColor(dc, g_clrBk);
@@ -2562,18 +2639,6 @@ void VCFView_SetContacts(HWND h, const std::vector<Contact>& contacts) {
     SendMessage(h, WM_SIZE, 0, MAKELPARAM(rc.right, rc.bottom));
 }
 
-extern "C" void VCFView_SetRawBlocks(HWND h, const std::vector<std::wstring>& rawBlocks) {
-    auto* st = (ViewState*)GetWindowLongPtrW(h, GWLP_USERDATA); if (!st) return;
-    st->rawBlocks = rawBlocks;
-    st->rightScroll = 0;
-    // raw blocks affect photo detection for filter
-    RebuildVisibleList(st);
-    UpdateRightPanel(st);
-    InvalidateRect(h, nullptr, FALSE);
-    RECT rc; GetClientRect(h, &rc);
-    SendMessage(h, WM_SIZE, 0, MAKELPARAM(rc.right, rc.bottom));
-}
-
 size_t VCFView_Count(HWND h) { auto* st = (ViewState*)GetWindowLongPtrW(h, GWLP_USERDATA); return st ? st->contacts.size() : 0; }
 size_t VCFView_GetSelection(HWND h) { auto* st = (ViewState*)GetWindowLongPtrW(h, GWLP_USERDATA); return st ? st->sel : 0; }
 void VCFView_SetSelection(HWND h, size_t idx) {
@@ -2607,19 +2672,17 @@ bool VCFView_SearchEx(HWND h, const std::wstring& needle, size_t startIndex, boo
         EnsureSelVisible(h, st);
         UpdateRightPanel(st);
         if (IsWindow(st->hEdit)) {
-            int len = GetWindowTextLengthW(st->hEdit);
-            if (len > 0) {
-                std::wstring all((size_t)len, L'\0');
-                GetWindowTextW(st->hEdit, &all[0], len + 1);
-                size_t pos = std::wstring::npos;
-                if (matchCase) {
-                    pos = all.find(needle);
-                } else {
-                    std::wstring low = LowerInvariant(all);
-                    pos = low.find(n);
-                }
-                if (pos != std::wstring::npos)
-                    SendMessageW(st->hEdit, EM_SETSEL, (WPARAM)pos, (LPARAM)(pos + needle.size()));
+            FINDTEXTEXW ft{};
+            ft.chrg.cpMin = 0;
+            ft.chrg.cpMax = -1;
+            ft.lpstrText = needle.c_str();
+            DWORD ftFlags = FR_DOWN;
+            if (matchCase) ftFlags |= FR_MATCHCASE;
+            if (wholeWord) ftFlags |= FR_WHOLEWORD;
+            LRESULT res = SendMessageW(st->hEdit, EM_FINDTEXTEXW, (WPARAM)ftFlags, (LPARAM)&ft);
+            if (res != -1) {
+                SendMessageW(st->hEdit, EM_SETSEL, (WPARAM)ft.chrgText.cpMin, (LPARAM)ft.chrgText.cpMax);
+                SendMessageW(st->hEdit, EM_SCROLLCARET, 0, 0);
             }
         }
         InvalidateRect(h, nullptr, FALSE);

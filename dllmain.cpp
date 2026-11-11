@@ -1,5 +1,4 @@
-// dllmain.cpp — Total Commander Lister plugin (VCF Lister)
-// Добавлено: передаём в viewer сырьевые блоки vCard для полного вывода всех полей (v3/v4)
+﻿// dllmain.cpp — Total Commander Lister plugin (VCF Lister)
 #define NOMINMAX
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0601
@@ -59,7 +58,6 @@ static HINSTANCE g_hInst = nullptr;
 
 // Из viewer-а
 extern "C" void VCFView_SetIniPath(const wchar_t* iniPath);
-extern "C" void VCFView_SetRawBlocks(HWND hView, const std::vector<std::wstring>& rawBlocks);
 extern "C" void VCFView_SetTCDarkMode(int dark, HWND hWnd);
 extern "C" void VCFView_RefreshTheme(HWND hWnd);
 
@@ -120,59 +118,11 @@ static std::wstring ReadWholeFileAsWide(const wchar_t* path) {
         (unsigned char)buf[2] == 0xBF) {
         return tryMbToW(buf.data() + 3, (int)buf.size() - 3, CP_UTF8, true);
     }
-    // строгий UTF-8 (без BOM) → нестрогий UTF-8 → 1251 → OEM → ACP
+    // Строгий UTF-8, иначе системная ANSI. На русской Windows это 1251.
+    // Жёсткая 1251 раньше OEM/ACP не годится: преобразование 1251 не падает ни на каком байте.
     std::wstring w = tryMbToW(buf.data(), (int)buf.size(), CP_UTF8, true);
     if (!w.empty()) return w;
-    // пробуем UTF-8 без строгой проверки (для файлов UTF-8 без BOM)
-    w = tryMbToW(buf.data(), (int)buf.size(), CP_UTF8, false);
-    if (!w.empty()) return w;
-    w = tryMbToW(buf.data(), (int)buf.size(), 1251);
-    if (!w.empty()) return w;
-    w = tryMbToW(buf.data(), (int)buf.size(), CP_OEMCP);
-    if (!w.empty()) return w;
     return tryMbToW(buf.data(), (int)buf.size(), CP_ACP);
-}
-
-// Case-insensitive find of ASCII keyword in wide text (vCard keys are case-insensitive per RFC)
-static size_t FindI(const std::wstring& text, const wchar_t* key, size_t from = 0) {
-    if (!key || !*key) return std::wstring::npos;
-    const size_t klen = wcslen(key);
-    if (from >= text.size() || klen == 0 || klen > text.size()) return std::wstring::npos;
-    for (size_t i = from; i + klen <= text.size(); ++i) {
-        bool ok = true;
-        for (size_t j = 0; j < klen; ++j) {
-            wchar_t a = text[i + j];
-            wchar_t b = key[j];
-            if (a >= L'a' && a <= L'z') a = (wchar_t)(a - L'a' + L'A');
-            if (b >= L'a' && b <= L'z') b = (wchar_t)(b - L'a' + L'A');
-            if (a != b) { ok = false; break; }
-        }
-        if (ok) return i;
-    }
-    return std::wstring::npos;
-}
-
-// Разбить исходный текст на блоки BEGIN:VCARD ... END:VCARD (v2.1/v3/v4)
-static std::vector<std::wstring> SplitVCardBlocks(const std::wstring& text) {
-    std::vector<std::wstring> out;
-
-    size_t i = 0, n = text.size();
-    while (i < n) {
-        size_t b = FindI(text, L"BEGIN:VCARD", i);
-        if (b == std::wstring::npos) break;
-        size_t e = FindI(text, L"END:VCARD", b);
-        if (e == std::wstring::npos) { // последний незакрытый — берём до конца
-            out.push_back(text.substr(b));
-            break;
-        }
-        e = text.find_first_of(L"\r\n", e); // до конца строки после END:VCARD
-        if (e == std::wstring::npos) e = n;
-        std::wstring block = text.substr(b, e - b);
-        // Show ALL cards, even completely empty ones (user request). Keep sync with parser.
-        out.push_back(block);
-        i = e;
-    }
-    return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -182,15 +132,9 @@ static HWND Impl_ListLoadW(HWND ParentWin, const wchar_t* FileToLoad, int ShowFl
     std::wstring text = ReadWholeFileAsWide(FileToLoad);
     if (text.empty()) return nullptr;
 
-    // Разбираем контакты как раньше
     std::vector<Contact> contacts = ParseVCard(text);
-
-    // А также сохраняем сырые блоки для полного вывода всех полей
-    std::vector<std::wstring> rawBlocks = SplitVCardBlocks(text);
-
     HWND hView = CreateVCFView(ParentWin, contacts);
     if (hView) {
-        VCFView_SetRawBlocks(hView, rawBlocks);
         ApplyShowFlagsTheme(hView, ShowFlags);
     }
     return hView;
@@ -203,10 +147,7 @@ static int Impl_ListLoadNextW(HWND ParentWin, HWND PluginWin, const wchar_t* Fil
     if (text.empty()) return LISTPLUGIN_ERROR;
 
     std::vector<Contact> contacts = ParseVCard(text);
-    std::vector<std::wstring> rawBlocks = SplitVCardBlocks(text);
-
     VCFView_SetContacts(PluginWin, contacts);
-    VCFView_SetRawBlocks(PluginWin, rawBlocks);
     ApplyShowFlagsTheme(PluginWin, ShowFlags);
 
     if (!contacts.empty()) {
@@ -257,6 +198,19 @@ static void Impl_ListSetDefaultParams(const ListDefaultParamStruct* dps) {
     if (!dps) return;
     std::wstring wideIni = A2W(dps->DefaultIniName);
     if (!wideIni.empty()) VCFView_SetIniPath(wideIni.c_str());
+}
+
+static HWND Impl_ListLoadA(HWND ParentWin, const char* FileToLoad, int ShowFlags) {
+    std::wstring wfile = A2W(FileToLoad);
+    return Impl_ListLoadW(ParentWin, wfile.c_str(), ShowFlags);
+}
+static int Impl_ListLoadNextA(HWND ParentWin, HWND PluginWin, const char* FileToLoad, int ShowFlags) {
+    std::wstring wfile = A2W(FileToLoad);
+    return Impl_ListLoadNextW(ParentWin, PluginWin, wfile.c_str(), ShowFlags);
+}
+static int Impl_ListSearchTextA(HWND PluginWin, const char* SearchString, int SearchParameter) {
+    std::wstring w = A2W(SearchString);
+    return Impl_ListSearchTextW(PluginWin, w.c_str(), SearchParameter);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -333,6 +287,32 @@ WLX_EXPORT void __stdcall ListGetDetectStringW(wchar_t* DetectString, int maxlen
     }
 }
 
+// ANSI exports for x64 (matches VCFLister.def)
+WLX_EXPORT HWND __stdcall ListLoad(HWND ParentWin, char* FileToLoad, int ShowFlags) {
+    __try {
+        return Impl_ListLoadA(ParentWin, FileToLoad, ShowFlags);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return NULL;
+    }
+}
+WLX_EXPORT int __stdcall ListLoadNext(HWND ParentWin, HWND PluginWin, char* FileToLoad, int ShowFlags) {
+    __try {
+        return Impl_ListLoadNextA(ParentWin, PluginWin, FileToLoad, ShowFlags);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return LISTPLUGIN_ERROR;
+    }
+}
+WLX_EXPORT int __stdcall ListSearchText(HWND PluginWin, char* SearchString, int SearchParameter) {
+    __try {
+        return Impl_ListSearchTextA(PluginWin, SearchString, SearchParameter);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return LISTPLUGIN_ERROR;
+    }
+}
+
 #else
 // x86: экспорт ANSI + Unicode без __try
 extern "C" {
@@ -342,16 +322,13 @@ extern "C" {
         lstrcpynA(DetectString, ds, maxlen);
     }
     HWND __stdcall ListLoad(HWND ParentWin, char* FileToLoad, int ShowFlags) {
-        std::wstring wfile = A2W(FileToLoad);
-        return Impl_ListLoadW(ParentWin, wfile.c_str(), ShowFlags);
+        return Impl_ListLoadA(ParentWin, FileToLoad, ShowFlags);
     }
     int __stdcall ListLoadNext(HWND ParentWin, HWND PluginWin, char* FileToLoad, int ShowFlags) {
-        std::wstring wfile = A2W(FileToLoad);
-        return Impl_ListLoadNextW(ParentWin, PluginWin, wfile.c_str(), ShowFlags);
+        return Impl_ListLoadNextA(ParentWin, PluginWin, FileToLoad, ShowFlags);
     }
     int __stdcall ListSearchText(HWND PluginWin, char* SearchString, int SearchParameter) {
-        std::wstring w = A2W(SearchString);
-        return Impl_ListSearchTextW(PluginWin, w.c_str(), SearchParameter);
+        return Impl_ListSearchTextA(PluginWin, SearchString, SearchParameter);
     }
     int __stdcall ListSendCommand(HWND PluginWin, int Command, int Parameter) {
         return Impl_ListSendCommand(PluginWin, Command, Parameter);
@@ -384,7 +361,7 @@ extern "C" {
 BOOL APIENTRY DllMain(HINSTANCE hinstDLL, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         g_hInst = hinstDLL;
-        DisableThreadLibraryCalls(hinstDLL);
+        // Static CRT (/MT) needs DLL_THREAD_ATTACH/DETACH. Do not disable them.
         VCFView_SetModuleInstance(hinstDLL);
     }
     else if (reason == DLL_PROCESS_DETACH) {
